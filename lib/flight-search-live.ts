@@ -36,9 +36,30 @@ function flattenForSignature(obj: any): string[] {
   return [String(obj)];
 }
 
-function getSignature(payload: Record<string, any>, token: string): string {
-  const values = flattenForSignature(payload);
-  return crypto.createHash('md5').update([token, ...values].join(':')).digest('hex');
+function getSignature(payload: {
+  marker: string;
+  host: string;
+  user_ip: string;
+  locale: string;
+  trip_class: string;
+  passengers: { adults: number; children: number; infants: number };
+  segments: { origin: string; destination: string; date: string }[];
+}, token: string): string {
+  // Travelpayouts requires values in THIS exact order
+  const parts: string[] = [
+    token,
+    payload.marker,
+    payload.host,
+    payload.user_ip,
+    payload.locale,
+    payload.trip_class,
+    String(payload.passengers.adults),
+    String(payload.passengers.children),
+    String(payload.passengers.infants),
+    ...payload.segments.flatMap(s => [s.origin, s.destination, s.date]),
+  ];
+
+  return crypto.createHash('md5').update(parts.join(':')).digest('hex');
 }
 
 // ── Step 1: initiate search ───────────────────────────────────────────────────
@@ -52,26 +73,31 @@ async function initiateLiveSearch(
 
   const host = process.env.NEXT_PUBLIC_SITE_HOST ?? 'localhost';
 
-  const payload = {
+  const passengers = { adults: 1, children: 0, infants: 0 };
+  const mappedSegments = segments.map((s) => ({
+    origin: s.origin,
+    destination: s.destination,
+    date: s.date,
+  }));
+
+  const payloadForSig = {
     marker,
     host,
     user_ip: '127.0.0.1',
     locale: 'en',
     trip_class: 'Y',
-    passengers: { adults: 1, children: 0, infants: 0 },
-    segments: segments.map((s) => ({
-      origin: s.origin,
-      destination: s.destination,
-      date: s.date,
-    })),
+    passengers,
+    segments: mappedSegments,
   };
 
-  const signature = getSignature(payload, token);
+  const signature = getSignature(payloadForSig, token);
+
+  const body = { ...payloadForSig, signature };
 
   const res = await fetch(`${HOST}/v1/flight_search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...payload, signature }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
